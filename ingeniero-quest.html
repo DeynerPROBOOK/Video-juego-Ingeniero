@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Ingeniero Quest: La Misión de la RAM</title>
+<style>
+  /* ====== Estilo retro / arcade ====== */
+  :root{
+    --ink:#120b2e; --panel:#1d1250; --line:#ffd23f; --hot:#ff4d8d; --ok:#3ddc84; --bad:#ff5252; --txt:#f4efff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#06030f;color:var(--txt);font-family:"Courier New",ui-monospace,monospace;overflow:hidden}
+  body{display:flex;align-items:center;justify-content:center}
+  /* El contenedor mantiene 16:9 y se adapta a la ventana; el JS ajusta font-size para escalar los textos */
+  #wrap{position:relative;width:min(100vw,calc(100vh*16/9));aspect-ratio:16/9;font-size:16px;background:#000;
+        box-shadow:0 0 0 .3em var(--line),0 0 3em rgba(255,77,141,.35)}
+  canvas{width:100%;height:100%;display:block;image-rendering:pixelated}
+  .ov{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;
+      background:rgba(10,5,32,.82);text-align:center;padding:1.5em}
+  .ov.on{display:flex}
+  .box{background:var(--panel);border:.25em solid var(--line);box-shadow:.4em .4em 0 var(--hot);padding:1.2em 1.6em;max-width:44em;width:100%}
+  h1{margin:0 0 .3em;font-size:2.3em;color:var(--line);text-shadow:.1em .1em 0 var(--hot);letter-spacing:.05em}
+  h2{margin:0 0 .5em;font-size:1.4em;color:var(--line)}
+  p{margin:.4em 0;line-height:1.45}
+  .small{font-size:.85em;opacity:.8}
+  .btn{font:inherit;font-weight:bold;font-size:1.1em;color:var(--ink);background:var(--line);border:0;padding:.6em 1.4em;margin-top:.8em;
+       cursor:pointer;box-shadow:.2em .2em 0 var(--hot)}
+  .btn:hover,.btn:focus-visible{background:#fff;outline:none}
+  #qo{display:grid;grid-template-columns:1fr 1fr;gap:.6em;margin-top:.8em}
+  #qo button{font:inherit;font-size:1em;text-align:left;color:var(--txt);background:var(--ink);border:.18em solid #5a46c8;padding:.7em .8em;cursor:pointer}
+  #qo button:hover:not(:disabled){border-color:var(--line);background:#2a1a70}
+  #qo button.ok{background:var(--ok);color:#06210f;border-color:#fff}
+  #qo button.bad{background:var(--bad);color:#fff;border-color:#fff}
+  #qq{font-size:1.5em;margin:.2em 0 .1em;color:#fff}
+  #fb{min-height:1.4em;font-weight:bold;margin-top:.7em}
+  .cert{background:#fff8dc;color:#3b2a00;border:.35em double #a67c00;padding:1em 1.4em;margin:.6em 0}
+  .cert b{display:block;font-size:1.5em;letter-spacing:.08em}
+  /* Controles táctiles (solo en pantallas táctiles) */
+  #touch{position:absolute;left:0;right:0;bottom:2%;display:none;justify-content:space-between;padding:0 3%;pointer-events:none}
+  #touch div{pointer-events:auto;display:flex;gap:.6em}
+  #touch button{font:inherit;font-size:1.6em;width:2.4em;height:2.4em;border-radius:50%;border:.1em solid var(--line);background:rgba(29,18,80,.7);color:#fff;touch-action:none}
+  @media (pointer:coarse){#touch{display:flex}}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+
+  <!-- Pantalla de preguntas -->
+  <div class="ov" id="quiz"><div class="box">
+    <h2 id="qt"></h2><div id="qq"></div>
+    <div id="qo"></div><div id="fb"></div>
+    <div class="small">Elige con el ratón o con las teclas 1-4</div>
+  </div></div>
+
+  <!-- Pantallas de inicio / fin -->
+  <div class="ov on" id="screen"></div>
+
+  <div id="touch">
+    <div><button id="tl">◀</button><button id="tr">▶</button></div>
+    <div><button id="tj">▲</button></div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   INGENIERO QUEST — plataformero arcade en un solo archivo (JS vainilla)
+   ===================================================================== */
+const C = document.getElementById('c'), X = C.getContext('2d');
+X.imageSmoothingEnabled = false;
+const W = 960, H = 540;          // resolución lógica del canvas
+const LW = 3600;                 // ancho total del nivel
+const GROUND = 480;              // altura del suelo
+const SPEED = 280, JUMP = 640, GRAV = 1700;   // física
+
+/* ---------- Banco de preguntas: [pregunta, correcta, mala1, mala2, mala3] ---------- */
+const TYPES = {
+  deriv: { label:'d/dx', name:'Derivada salvaje', color:'#ff5a5f', qs:[
+    ['d/dx ( x² ) = ?', '2x', 'x', 'x²', '2'],
+    ['d/dx ( 3x ) = ?', '3', '3x', 'x', '0'],
+    ['d/dx ( sen x ) = ?', 'cos x', '-cos x', 'sen x', '-sen x'],
+    ['d/dx ( eˣ ) = ?', 'eˣ', 'x·eˣ⁻¹', '1', 'e'],
+    ['d/dx ( 5 ) = ?', '0', '5', '1', 'x'],
+    ['d/dx ( x³ ) = ?', '3x²', 'x²', '3x', 'x³/3'] ]},
+  int: { label:'∫', name:'Integral gigante', color:'#a05bff', qs:[
+    ['∫ 2x dx = ?', 'x² + C', '2 + C', 'x + C', '2x² + C'],
+    ['∫ cos x dx = ?', 'sen x + C', '-sen x + C', 'cos x + C', '-cos x + C'],
+    ['∫ 1 dx = ?', 'x + C', '1 + C', '0', 'x² + C'],
+    ['∫ 3x² dx = ?', 'x³ + C', '6x + C', '3x³ + C', 'x² + C'],
+    ['∫ 0 dx = ?', 'C', '0', 'x', '1'] ]},
+  for: { label:'for', name:'Bucle for', color:'#27c4a5', qs:[
+    ['for(i=0; i<3; i++) imprimir(i)\n¿Qué imprime?', '0 1 2', '1 2 3', '0 1 2 3', '3'],
+    ['¿Cuántas vueltas da?\nfor(i=1; i<=5; i++)', '5', '4', '6', '1'],
+    ['for i in range(4): ...\n¿Cuántas iteraciones?', '4', '3', '5', '0'],
+    ['s=0; for(i=1;i<=3;i++) s+=i\n¿Cuánto vale s?', '6', '3', '5', '9'] ]},
+  if: { label:'if', name:'Condicional if', color:'#ffb627', qs:[
+    ['x=5; if(x>3) imprimir("A")\nelse imprimir("B")', 'A', 'B', 'A y B', 'Nada'],
+    ['if(2+2==5){imprimir("A")}\nelse{imprimir("B")}', 'B', 'A', 'Error', 'Nada'],
+    ['x=10; if(x%2==0) imprimir("par")\n¿Qué imprime?', 'par', 'impar', 'Nada', '10'],
+    ['¿Cuánto vale !true ?', 'false', 'true', 'null', '1'] ]}
+};
+
+/* ---------- Nivel: suelo con fosos y plataformas (g = suelo) ---------- */
+const plats = [
+  {x:0,y:GROUND,w:900,h:60,g:1},   {x:1050,y:GROUND,w:750,h:60,g:1},
+  {x:1950,y:GROUND,w:750,h:60,g:1},{x:2850,y:GROUND,w:750,h:60,g:1},
+  {x:300,y:385,w:140,h:20},  {x:560,y:315,w:140,h:20},
+  {x:1100,y:385,w:160,h:20}, {x:1350,y:305,w:140,h:20}, {x:1600,y:385,w:120,h:20},
+  {x:2000,y:385,w:150,h:20}, {x:2250,y:300,w:150,h:20}, {x:2500,y:215,w:170,h:20}
+];
+const enemySpots = [[650,'deriv'],[1200,'for'],[1650,'int'],[2100,'if'],[2420,'deriv'],[3000,'int'],[3200,'for']];
+const door = {x:3410,y:400,w:60,h:80};
+
+/* ---------- Estado del juego ---------- */
+let state = 'menu';              // menu | play | quiz | win | over
+let P, enemies, ram, score, lives, hasRAM, toast, toastT, time = 0, lastToast = 0;
+const keys = {left:0, right:0, jump:0};
+const stars = Array.from({length:70}, (_, i) => ({x:(i*137)%W, y:(i*71)%300, s:1+(i%3)}));
+
+function reset(){
+  P = {x:60,y:400,w:30,h:44,vx:0,vy:0,face:1,ground:false,inv:0,check:30,t:0};
+  enemies = enemySpots.map(([x,t]) => ({x,x0:x,y:GROUND-46,w:44,h:46,type:t,dead:false,ph:Math.random()*6}));
+  ram = {x:2570,y:172,w:36,h:26,got:false};
+  score = 0; lives = 5; hasRAM = false; toast = ''; toastT = 0;
+}
+
+/* ---------- Utilidades ---------- */
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const hit = (a,b) => a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y;
+const shuffle = a => { for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]]} return a; };
+function say(t,d=2){ toast=t; toastT=d; }
+
+/* ---------- Pantallas HTML ---------- */
+const scr = document.getElementById('screen');
+function showScreen(html){ scr.innerHTML = html; scr.classList.add('on'); }
+function menu(){
+  state='menu';
+  showScreen(`<div class="box">
+    <h1>INGENIERO QUEST</h1>
+    <h2>La misión de la Memoria RAM</h2>
+    <p>Cruza el campus, derrota a las materias con tus conocimientos, encuentra la <b>Memoria RAM</b> y abre la puerta de la <b>Facultad</b>.</p>
+    <p class="small">← → / A D: mover &nbsp;|&nbsp; ↑ / W / Espacio: saltar<br>Tocar una materia lanza una pregunta. Fallar = pierdes una vida.</p>
+    <button class="btn" id="go">▶ JUGAR (Enter)</button></div>`);
+  document.getElementById('go').onclick = start;
+}
+function start(){ reset(); scr.classList.remove('on'); state='play'; say('¡Encuentra la Memoria RAM!',3); }
+function gameOver(){
+  state='over';
+  showScreen(`<div class="box"><h1>GAME OVER</h1><p>Te quedaste sin vidas.<br>Puntos: ${score}</p>
+    <button class="btn" id="go">↻ Reintentar (Enter)</button></div>`);
+  document.getElementById('go').onclick = start;
+}
+function win(){
+  state='win';
+  const pts = score + lives*50;
+  showScreen(`<div class="box"><h1>¡VICTORIA!</h1><p>Instalaste la RAM y la Facultad te abre sus puertas.</p>
+    <div class="cert"><span>Se otorga el</span><b>TÍTULO UNIVERSITARIO</b><span>de Ingeniero/a, con honores</span></div>
+    <p>Puntuación final: <b>${pts}</b></p>
+    <button class="btn" id="go">↻ Jugar de nuevo (Enter)</button></div>`);
+  document.getElementById('go').onclick = start;
+}
+
+/* ---------- Preguntas ---------- */
+const quizEl = document.getElementById('quiz'), qo = document.getElementById('qo'), fb = document.getElementById('fb');
+let curEnemy = null, answered = false;
+function openQuiz(e){
+  state='quiz'; curEnemy=e; answered=false; keys.left=keys.right=keys.jump=0;
+  const t = TYPES[e.type], q = t.qs[Math.random()*t.qs.length|0];
+  document.getElementById('qt').textContent = '⚔ ' + t.name + ' te bloquea el paso';
+  const qq = document.getElementById('qq'); qq.style.whiteSpace='pre-line'; qq.textContent = q[0];
+  fb.textContent=''; qo.innerHTML='';
+  shuffle(q.slice(1).map((txt,i)=>({txt,ok:i===0}))).forEach((o,i)=>{
+    const b=document.createElement('button'); b.textContent=(i+1)+') '+o.txt; b.dataset.ok=o.ok?1:0;
+    b.onclick=()=>answer(b); qo.appendChild(b);
+  });
+  quizEl.classList.add('on');
+}
+function answer(btn){
+  if(answered) return; answered=true;
+  const ok = btn.dataset.ok==='1';
+  [...qo.children].forEach(b=>{ b.disabled=true; if(b.dataset.ok==='1') b.classList.add('ok'); });
+  if(!ok) btn.classList.add('bad');
+  fb.style.color = ok ? 'var(--ok)' : 'var(--bad)';
+  fb.textContent = ok ? '¡Correcto! +100 puntos' : 'Incorrecto… −1 vida';
+  setTimeout(()=>{
+    quizEl.classList.remove('on');
+    if(ok){ curEnemy.dead=true; score+=100; say('¡Materia aprobada!'); P.inv=1; state='play'; }
+    else {
+      lives--; P.inv=1.8; P.vy=-350; P.x=clamp(P.x-(P.face)*110,0,LW-P.w);
+      if(lives<=0) return gameOver();
+      state='play';
+    }
+  }, 1100);
+}
+
+/* ---------- Entrada ---------- */
+const MAP = {ArrowLeft:'left',KeyA:'left',ArrowRight:'right',KeyD:'right',ArrowUp:'jump',KeyW:'jump',Space:'jump'};
+addEventListener('keydown', e=>{
+  if(MAP[e.code]){ e.preventDefault(); keys[MAP[e.code]]=1; }
+  if(e.code==='Enter' && (state==='menu'||state==='over'||state==='win')) start();
+  if(state==='quiz' && /^[1-4]$/.test(e.key)){ const b=qo.children[+e.key-1]; if(b) answer(b); }
+});
+addEventListener('keyup', e=>{ if(MAP[e.code]) keys[MAP[e.code]]=0; });
+[['tl','left'],['tr','right'],['tj','jump']].forEach(([id,k])=>{
+  const b=document.getElementById(id);
+  b.addEventListener('pointerdown',e=>{e.preventDefault();keys[k]=1});
+  ['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>keys[k]=0));
+});
+
+/* ---------- Lógica ---------- */
+function loseLife(msg){
+  lives--; say(msg);
+  if(lives<=0) return gameOver();
+  P.x=P.check; P.y=380; P.vy=0; P.inv=1.5;
+}
+function update(dt){
+  if(state!=='play') return;
+  time += dt;
+  const p=P, dir=keys.right-keys.left;
+  p.vx = dir*SPEED; if(dir) p.face=dir;
+  p.x = clamp(p.x + p.vx*dt, 0, LW-p.w);
+  if(keys.jump && p.ground){ p.vy=-JUMP; p.ground=false; }
+  const prevBottom = p.y+p.h;
+  p.vy += GRAV*dt; p.y += p.vy*dt; p.ground=false;
+  // Plataformas "de un solo sentido": solo se aterriza desde arriba
+  if(p.vy>=0) for(const s of plats){
+    if(p.x+p.w>s.x && p.x<s.x+s.w && prevBottom<=s.y+2 && p.y+p.h>=s.y){
+      p.y=s.y-p.h; p.vy=0; p.ground=true; if(s.g) p.check=s.x+30; break;
+    }
+  }
+  if(p.y>H+120) loseLife('¡Caíste al vacío!');
+  p.t += Math.abs(p.vx)*dt; p.inv=Math.max(0,p.inv-dt);
+
+  // Enemigos: patrullan de lado a lado; al tocarlos, pregunta
+  for(const e of enemies){
+    if(e.dead) continue;
+    e.x = e.x0 + Math.sin(time*1.2+e.ph)*70;
+    if(!p.inv && hit({x:p.x+4,y:p.y+4,w:p.w-8,h:p.h-6}, e)){ openQuiz(e); return; }
+  }
+  // Memoria RAM
+  if(!ram.got && hit(p,ram)){ ram.got=true; hasRAM=true; score+=300; say('¡Memoria RAM obtenida! La Facultad está abierta',3.5); }
+  // Puerta del castillo
+  if(hit(p,door)){
+    if(hasRAM) win();
+    else if(time-lastToast>2){ lastToast=time; say('🔒 La puerta necesita una Memoria RAM'); }
+  }
+  toastT=Math.max(0,toastT-dt);
+}
+
+/* ---------- Dibujo ---------- */
+const R=(x,y,w,h,c)=>{X.fillStyle=c;X.fillRect(Math.round(x),Math.round(y),w,h)};
+function txt(s,x,y,size,col,al='center'){
+  X.font=`bold ${size}px "Courier New",monospace`; X.textAlign=al; X.fillStyle='#000'; X.fillText(s,x+2,y+2); X.fillStyle=col; X.fillText(s,x,y);
+}
+function drawBG(cam){
+  const g=X.createLinearGradient(0,0,0,H); g.addColorStop(0,'#150c47'); g.addColorStop(.6,'#8a2f95'); g.addColorStop(1,'#ff7a7a');
+  X.fillStyle=g; X.fillRect(0,0,W,H);
+  stars.forEach(s=>R((s.x-cam*.05+W*4)%W,s.y,s.s,s.s,'#fff'));
+  R(700-cam*.08,90,70,70,'#ffd23f');                      // sol retro
+  for(const [k,c] of [[.2,'#3a1d73'],[.4,'#2a1457']]){   // montañas con parallax
+    X.fillStyle=c; X.beginPath(); X.moveTo(0,H);
+    for(let x=0;x<=W;x+=16){ const wx=x+cam*k; X.lineTo(x, 400-k*120-Math.abs(Math.sin(wx*.006+k*9))*90*(1+k)); }
+    X.lineTo(W,H); X.fill();
+  }
+}
+function drawPlat(s,cam){
+  const x=s.x-cam; if(x>W||x+s.w<0) return;
+  if(s.g){ R(x,s.y,s.w,s.h,'#7a4a21'); R(x,s.y,s.w,10,'#43d17a'); R(x,s.y+10,s.w,4,'#2a9a55');
+    for(let i=0;i<s.w;i+=40) R(x+i+8,s.y+28,10,8,'#5e3815'); }
+  else { R(x,s.y,s.w,s.h,'#c0392b');
+    for(let i=0;i<s.w;i+=28){ R(x+i,s.y,2,s.h,'#7b241c'); } R(x,s.y+9,s.w,2,'#7b241c'); R(x,s.y,s.w,4,'#ff8a65'); }
+}
+function drawCastle(cam){
+  const x=3300-cam; if(x>W+50) return;
+  R(x,200,260,280,'#9aa5b1');
+  for(let i=0;i<260;i+=26) R(x+i,176,16,26,'#9aa5b1');              // almenas
+  R(x-30,150,70,330,'#7f8c99'); R(x+220,150,70,330,'#7f8c99');       // torres
+  for(let i=-30;i<40;i+=24){ R(x+i,126,14,26,'#7f8c99'); R(x+220+i+30,126,14,26,'#7f8c99'); }
+  for(let r=0;r<10;r++) for(let c=0;c<9;c++) R(x+c*30+(r%2)*15,210+r*27,2,2,'#6d7782');
+  R(x+110,60,5,66,'#ddd'); R(x+115,60,34,20,hasRAM?'#3ddc84':'#ff4d8d');    // bandera
+  R(x+60,240,140,30,'#1d1250'); txt('FACULTAD',x+130,262,20,'#ffd23f');
+  const d=door; R(d.x-cam-6,d.y-8,d.w+12,d.h+8,'#4a3b2a');
+  R(d.x-cam,d.y,d.w,d.h,hasRAM?'#fff3a0':'#6b3f1d');
+  if(!hasRAM){ R(d.x-cam+22,d.y+30,16,16,'#ffd23f'); R(d.x-cam+26,d.y+20,8,12,'#ffd23f'); }
+  else txt('ENTRAR',d.x-cam+30,d.y-14+Math.sin(time*6)*3,14,'#fff');
+}
+function drawRAM(cam){
+  if(ram.got) return;
+  const x=ram.x-cam, y=ram.y+Math.sin(time*3)*5;
+  X.globalAlpha=.35; X.fillStyle='#8cffb0'; X.beginPath(); X.arc(x+18,y+13,30+Math.sin(time*5)*4,0,7); X.fill(); X.globalAlpha=1;
+  R(x,y,36,22,'#1faa59'); R(x,y+22,36,4,'#ffd23f');
+  for(let i=0;i<36;i+=6) R(x+i,y+22,3,4,'#8a6d00');
+  for(let i=4;i<30;i+=10) R(x+i,y+4,7,10,'#111');
+  txt('RAM',x+18,y-8,14,'#8cffb0');
+}
+function drawEnemy(e,cam){
+  if(e.dead) return;
+  const t=TYPES[e.type], x=e.x-cam, y=e.y+Math.sin(time*5+e.ph)*3;
+  R(x,y,e.w,e.h,t.color); R(x,y,e.w,5,'rgba(255,255,255,.35)'); R(x,y+e.h-5,e.w,5,'rgba(0,0,0,.3)');
+  R(x+9,y+9,9,9,'#fff'); R(x+27,y+9,9,9,'#fff'); R(x+13,y+12,4,5,'#000'); R(x+31,y+12,4,5,'#000');
+  R(x+8,y+5,12,3,'#000'); R(x+25,y+5,12,3,'#000');                    // cejas enojadas
+  txt(t.label,x+22,y+e.h-9,18,'#fff');
+  txt(t.name,x+22,y-8,11,'#fff');
+}
+function drawPlayer(cam){
+  const p=P; if(p.inv>0 && Math.floor(time*16)%2) return;
+  const x=Math.round(p.x-cam), y=Math.round(p.y), f=p.face, step=p.ground&&p.vx?Math.floor(p.t/18)%2:0;
+  X.save(); X.translate(x+p.w/2,0); X.scale(f,1); X.translate(-p.w/2,0);
+  R(-6,y+14,10,22,'#e67e22');                       // mochila
+  R(6,y+14,18,18,'#2e86de');                        // camisa
+  R(8,y,16,16,'#f5cba7'); R(6,y-2,20,7,'#2c3e50');  // cabeza + gorro
+  R(20,y+4,10,3,'#2c3e50'); R(18,y+8,3,3,'#000'); R(12,y+11,10,2,'#c0392b');
+  R(10,y+32,8,12-step*3,'#34495e'); R(18,y+32,8,12-(1-step)*3,'#34495e'); // piernas
+  R(8,y+42,10,3,'#fff'); R(18,y+42,10,3,'#fff');
+  R(22,y+16,8,6,'#f5cba7');                         // brazo
+  X.restore();
+}
+function drawHUD(){
+  R(0,0,W,34,'rgba(10,5,32,.75)');
+  txt('♥'.repeat(Math.max(lives,0)),14,24,20,'#ff4d8d','left');
+  txt('PUNTOS '+String(score).padStart(5,'0'),W/2,24,18,'#ffd23f');
+  txt(hasRAM?'RAM: ✔ INSTALADA':'RAM: ✘ BUSCANDO',W-150,24,16,hasRAM?'#3ddc84':'#ff8a8a');
+  if(toastT>0) txt(toast,W/2,76,20,'#fff');
+}
+function draw(){
+  const cam=clamp(P.x-W/2+15,0,LW-W);
+  drawBG(cam);
+  drawCastle(cam);
+  plats.forEach(s=>drawPlat(s,cam));
+  drawRAM(cam);
+  enemies.forEach(e=>drawEnemy(e,cam));
+  drawPlayer(cam);
+  drawHUD();
+}
+
+/* ---------- Bucle principal y ajuste responsive ---------- */
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(.033,(now-last)/1000); last=now;
+  update(dt); draw(); requestAnimationFrame(loop);
+}
+function fit(){ const w=document.getElementById('wrap').clientWidth; document.getElementById('wrap').style.fontSize=(w/960*16)+'px'; }
+addEventListener('resize',fit); fit();
+
+reset(); menu(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>
